@@ -1,7 +1,8 @@
-streamlit
-tensorflow>=2.10
-joblib
-scikit-learn
-pandas
-numpy
-matplotlib
+streamlit==1.47.0
+# Use CPU-only TensorFlow for smaller install on Streamlit Cloud
+tensorflow-cpu==2.10.0
+joblib==1.4.2
+scikit-learn==1.5.2
+pandas==2.2.3
+numpy==1.26.4
+matplotlib==3.9.2
