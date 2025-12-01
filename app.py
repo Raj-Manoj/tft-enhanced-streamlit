@@ -1,19 +1,49 @@
-import os
 from pathlib import Path
-import io
 
 import joblib
-import sys
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import streamlit as st
-import tensorflow as tf
-from tensorflow import keras
+
+def _safe_import_tensorflow():
+    """Attempt to import tensorflow when needed. Return module or None on failure."""
+    try:
+        import importlib
+        tf = importlib.import_module('tensorflow')
+        return tf
+    except Exception:
+        return None
+
+
+def _enable_unsafe_deserialization(tf_module):
+    """Try to enable Keras unsafe deserialization in a few possible locations.
+    Return True if enabled, False otherwise."""
+    try:
+        # Try common locations where the API may live
+        if hasattr(tf_module, 'keras'):
+            k = tf_module.keras
+            # config or utils may expose the helper
+            for attr in ('config', 'utils', 'saving'):
+                obj = getattr(k, attr, None)
+                if obj is not None and hasattr(obj, 'enable_unsafe_deserialization'):
+                    getattr(obj, 'enable_unsafe_deserialization')()
+                    return True
+            # fallback: try top-level on keras
+            if hasattr(k, 'enable_unsafe_deserialization'):
+                k.enable_unsafe_deserialization()
+                return True
+    except Exception:
+        return False
+    return False
 
 # App settings
-BASE_DIR = Path('.')
+# Use the directory where this file lives as base (works for Streamlit Cloud)
+BASE_DIR = Path(__file__).parent
+_fallback_model = next((p for p in BASE_DIR.glob('*.keras')), None)
 MODEL_PATH = BASE_DIR / 'best_tft_enhanced.keras'
+if not MODEL_PATH.exists() and _fallback_model is not None:
+    MODEL_PATH = _fallback_model
 SCALER_PATH = BASE_DIR / 'scaler.joblib'
 EVENT_MAP_PATH = BASE_DIR / 'event_type_mapping.joblib'
 
@@ -25,19 +55,8 @@ MAX_MACHINES = 200
 
 st.set_page_config(page_title='TFT-enhanced inference', layout='wide')
 
-# Ensure stdout/stderr use UTF-8 on Windows to avoid 'charmap' encode errors
-if hasattr(sys.stdout, 'reconfigure'):
-    try:
-        sys.stdout.reconfigure(encoding='utf-8')
-    except Exception:
-        pass
-if hasattr(sys.stderr, 'reconfigure'):
-    try:
-        sys.stderr.reconfigure(encoding='utf-8')
-    except Exception:
-        pass
-
 def _safe_text(obj):
+    """Return a UTF-8-safe string representation for logging/UI."""
     try:
         s = str(obj)
     except Exception:
@@ -45,7 +64,6 @@ def _safe_text(obj):
             s = repr(obj)
         except Exception:
             s = '<unprintable object>'
-    # ensure valid utf-8
     return s.encode('utf-8', errors='replace').decode('utf-8')
 
 st.title('TFT-enhanced — Resource prediction (Streamlit)')
@@ -66,9 +84,11 @@ def read_csv_maybe(uploaded, path, names):
         try:
             return pd.read_csv(uploaded, header=None, names=names, low_memory=False)
         except Exception as e:
-            st.error(_safe_text(f'Error reading uploaded {path.name}: {e}'))
+            st.error(_safe_text(f'Error reading uploaded file: {e}'))
             raise
     else:
+        if not path.exists():
+            raise FileNotFoundError(f'Expected CSV not found at {path}')
         return pd.read_csv(path, header=None, names=names, low_memory=False)
 
 def safe_int_series(s):
@@ -223,28 +243,36 @@ if st.button('Run pipeline'):
     # Load model
     with st.spinner('Loading model...'):
         model = None
-        if MODEL_PATH.exists():
-            try:
-                # compile=False to avoid optimizer issues; recompile after loading
-                model = tf.keras.models.load_model(str(MODEL_PATH), compile=False)
-                model.compile(optimizer=tf.keras.optimizers.Adam(1e-3), loss=tf.keras.losses.Huber(), metrics=[tf.keras.metrics.MeanAbsoluteError(name='mae')])
-                st.success('Model loaded from workspace.')
-            except Exception as e:
-                msg = str(e)
-                # Common error when Lambda layers contain Python lambdas — offer unsafe deserialization
-                if 'Lambda' in msg and ('Python lambda' in msg or 'unsafe' in msg or 'enable_unsafe_deserialization' in msg):
-                    st.warning('Model contains a Lambda layer using a Python lambda. Enabling unsafe deserialization to attempt load (this may execute arbitrary code).')
-                    try:
-                        keras.config.enable_unsafe_deserialization()
-                        model = tf.keras.models.load_model(str(MODEL_PATH), compile=False)
-                        model.compile(optimizer=tf.keras.optimizers.Adam(1e-3), loss=tf.keras.losses.Huber(), metrics=[tf.keras.metrics.MeanAbsoluteError(name='mae')])
-                        st.success('Model loaded from workspace (unsafe deserialization enabled).')
-                    except Exception as e2:
-                        st.error(f'Could not load model even after enabling unsafe deserialization: {e2}')
-                else:
-                    st.error(f'Could not load model: {e}')
+        tf_module = _safe_import_tensorflow()
+        if tf_module is None:
+            st.error('TensorFlow could not be imported in this environment — model loading skipped.')
         else:
-            st.error('Model file `best_tft_enhanced.keras` not found in workspace.')
+            if MODEL_PATH.exists():
+                try:
+                    # compile=False to avoid optimizer issues; recompile after loading
+                    model = tf_module.keras.models.load_model(str(MODEL_PATH), compile=False)
+                    model.compile(optimizer=tf_module.keras.optimizers.Adam(1e-3), loss=tf_module.keras.losses.Huber(), metrics=[tf_module.keras.metrics.MeanAbsoluteError(name='mae')])
+                    st.success('Model loaded from workspace.')
+                except Exception as e:
+                    msg = str(e)
+                    # Common error when Lambda layers contain Python lambdas — offer unsafe deserialization
+                    if 'Lambda' in msg and ('Python lambda' in msg or 'unsafe' in msg or 'enable_unsafe_deserialization' in msg):
+                        st.warning('Model contains a Lambda layer using a Python lambda. Enabling unsafe deserialization to attempt load (this may execute arbitrary code).')
+                        ok = _enable_unsafe_deserialization(tf_module)
+                        if ok:
+                            try:
+                                model = tf_module.keras.models.load_model(str(MODEL_PATH), compile=False)
+                                model.compile(optimizer=tf_module.keras.optimizers.Adam(1e-3), loss=tf_module.keras.losses.Huber(), metrics=[tf_module.keras.metrics.MeanAbsoluteError(name='mae')])
+                                st.success('Model loaded from workspace (unsafe deserialization enabled).')
+                            except Exception as e2:
+                                st.error(f'Could not load model even after enabling unsafe deserialization: {e2}')
+                        else:
+                            st.error('Could not enable unsafe deserialization in this TensorFlow/Keras build.')
+                    else:
+                        st.error(f'Could not load model: {e}')
+            else:
+                st.error('Model file `best_tft_enhanced.keras` not found in workspace.')
+        
 
     if model is not None:
         with st.spinner('Evaluating on test dataset...'):
@@ -252,7 +280,7 @@ if st.button('Run pipeline'):
                 if X_test.shape[0] == 0:
                     st.warning('No test sequences built — cannot evaluate or predict.')
                 else:
-                    ds_test = tf.data.Dataset.from_tensor_slices((X_test.astype(np.float32), Y_test.astype(np.float32))).batch(128)
+                    ds_test = tf_module.data.Dataset.from_tensor_slices((X_test.astype(np.float32), Y_test.astype(np.float32))).batch(128)
                     res = model.evaluate(ds_test, verbose=0)
                     st.write('Test evaluation (loss, mae):', res)
 
