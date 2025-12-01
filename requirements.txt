@@ -1,8 +1,8 @@
-streamlit==1.47.0
-# Use CPU-only TensorFlow for smaller install on Streamlit Cloud
-tensorflow-cpu==2.10.0
-joblib==1.4.2
-scikit-learn==1.5.2
-pandas==2.2.3
-numpy==1.26.4
-matplotlib==3.9.2
+streamlit==1.51.0
+# TensorFlow version that is available for Python 3.13 on Streamlit Cloud
+tensorflow==2.20.0
+joblib==1.5.2
+scikit-learn==1.7.2
+pandas==2.3.3
+numpy==2.3.5
+matplotlib==3.10.7
