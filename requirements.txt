@@ -1,3 +1,19 @@
+streamlit==1.30.0
+
+# Use TensorFlow/Keras 2.11 pairing (matches many older saved models)
+tensorflow-cpu==2.11.0
+keras==2.11.0
+
+# Pin numpy to a version compatible with TF 2.11 compiled wheels
+numpy==1.23.5
+
+pandas>=1.5
+scikit-learn>=1.1
+joblib>=1.2
+matplotlib>=3.5
+
+# Avoid newer protobuf that breaks TF deserialization
+protobuf<=3.20.3
 streamlit==1.32.0
 
 tensorflow==2.16.1
